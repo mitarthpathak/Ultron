@@ -8,10 +8,18 @@ The plan: Claude Opus 5.5 writes about 2,000 conversations in Ultron's voice, yo
 | `OPUS_DATASET_PROMPT.md` | The prompt for Claude Opus 5.5 that writes the dataset in 50 batches |
 | `SYSTEM_PROMPT.txt` | The short system prompt the robot runs with (also added to every training example) |
 | `check_dataset.py` | Cleans Opus's output, drops bad lines, warns about repetition, writes `train.jsonl` / `val.jsonl` |
+| `raw/batch_01.jsonl` … `raw/batch_50.jsonl` | The generated dataset: 50 batches of 40 conversations, one batch per topic in the batch plan |
+| `data/train.jsonl`, `data/val.jsonl` | The cleaned split, with the system prompt added: 1,900 training and 100 validation conversations |
 
 ## Step 1: generate the dataset with Claude Opus 5.5
 
-Follow the instructions at the top of `OPUS_DATASET_PROMPT.md`. Put every batch into one file, `ultron_raw.jsonl`. Pasting whole replies, code fences included, is fine.
+**Done.** All 50 batches are in `raw/`, and `check_dataset.py` kept all 2,000 conversations with no style warnings. If you edit or replace a batch, rebuild the split:
+
+```bash
+python3 check_dataset.py raw/*.jsonl --system SYSTEM_PROMPT.txt --out-dir data
+```
+
+To generate batches yourself instead, follow the instructions at the top of `OPUS_DATASET_PROMPT.md`. Put every batch into one file, `ultron_raw.jsonl`. Pasting whole replies, code fences included, is fine.
 
 - **In the Claude app:** 50 replies. Your plan's usage limits may spread this across a few sessions.
 - **Through the API:** model `claude-opus-5-5` costs $4 per million input tokens and $20 per million output tokens. All 50 batches should cost roughly $5–$15 (an estimate), or about half that through the Message Batches API.
