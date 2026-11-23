@@ -280,6 +280,8 @@ def main():
                     help="compute micro-batches larger than this in two halves (lower peak memory; "
                          "same math, same batches)")
     ap.add_argument("--warmup", type=int, default=10)
+    ap.add_argument("--init-adapter", help="start from this trained adapter instead of a new one "
+                    "(for a short top-up run; ignored when resuming from a checkpoint)")
     ap.add_argument("--no-recompute", action="store_true", help="store all activations (faster, more memory)")
     ap.add_argument("--eval-every", type=int, default=60)
     ap.add_argument("--save-every", type=int, default=20)
@@ -317,8 +319,9 @@ def main():
                 p.data = p.data.clone()
     ckpt = os.path.join(args.out, "checkpoint")
     resume = os.path.exists(os.path.join(ckpt, "state.pt")) and not args.verify
-    if resume:
-        model = PeftModel.from_pretrained(model, ckpt, is_trainable=True, autocast_adapter_dtype=False)
+    if resume or args.init_adapter:
+        src = ckpt if resume else args.init_adapter
+        model = PeftModel.from_pretrained(model, src, is_trainable=True, autocast_adapter_dtype=False)
     else:
         cfg = LoraConfig(r=args.rank, lora_alpha=args.alpha, lora_dropout=0.0,
                          target_modules=TARGETS, task_type="CAUSAL_LM")
