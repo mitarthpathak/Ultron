@@ -19,17 +19,47 @@ you'd normally use Unsloth or TRL instead.
 """
 
 import argparse
+import gc
 import json
 import math
 import os
 import random
 import time
 
+# PyTorch's CPU matmul backend (oneDNN via ideep) caches a compiled kernel for
+# every input shape. Variable-length batches make thousands of shapes, which
+# grows memory by ~100 MB per step. Keep the caches small. (Set before torch loads.)
+os.environ.setdefault("LRU_CACHE_CAPACITY", "64")
+os.environ.setdefault("ONEDNN_PRIMITIVE_CACHE_CAPACITY", "64")
+
 import torch
 import torch.nn.functional as F
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.utils.checkpoint import checkpoint
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+
+try:  # return freed heap memory to the OS between steps (glibc only)
+    import ctypes
+    _trim = ctypes.CDLL("libc.so.6").malloc_trim
+except (OSError, AttributeError):
+    _trim = None
+
+
+def release_memory():
+    gc.collect()
+    if _trim:
+        _trim(0)
+
+
+def rss_gb():
+    try:
+        for line in open("/proc/self/status"):
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1048576
+    except OSError:
+        pass
+    return 0.0
+
 
 TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
@@ -167,7 +197,16 @@ def shared_prefix_loss(model, prefix, ids, labels, mask):
     target = labels[:, 1:]
     keep = target != -100
     logits = head(hid[:, :-1][keep]).float()
-    return F.cross_entropy(logits, target[keep], reduction="sum"), int(keep.sum())
+    loss = F.cross_entropy(logits, target[keep], reduction="sum")
+    loss._caches = (pre.past_key_values, cache)  # cleared by drop_caches() after backward
+    return loss, int(keep.sum())
+
+
+def drop_caches(loss):
+    """Release the KV tensors held by a loss's caches (autograd keeps what it needs)."""
+    for c in getattr(loss, "_caches", ()):
+        for layer in getattr(c, "layers", []):
+            layer.keys = layer.values = None
 
 
 def full_sequence_loss(model, prefix, ids, labels, mask):
@@ -192,7 +231,9 @@ def evaluate(model, prefix, examples, micro, pad_id, device, max_tokens=0):
         ids, labels, mask = collate(examples, g, pad_id, device)
         loss, k = shared_prefix_loss(model, prefix, ids, labels, mask)
         total, n = total + loss.item(), n + k
+        drop_caches(loss)
     model.train()
+    release_memory()
     return total / n
 
 
@@ -235,11 +276,17 @@ def main():
     ap.add_argument("--accum", type=int, default=2, help="micro-batches per optimizer step")
     ap.add_argument("--max-tokens", type=int, default=600,
                     help="cap on padded tokens per micro-batch after the prefix (0 = no cap)")
+    ap.add_argument("--pass-tokens", type=int, default=0,
+                    help="compute micro-batches larger than this in two halves (lower peak memory; "
+                         "same math, same batches)")
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--no-recompute", action="store_true", help="store all activations (faster, more memory)")
     ap.add_argument("--eval-every", type=int, default=60)
     ap.add_argument("--save-every", type=int, default=20)
     ap.add_argument("--max-steps", type=int, default=0, help="stop early (for timing runs)")
+    ap.add_argument("--restart-above-gb", type=float, default=0,
+                    help="if memory between steps exceeds this, save a checkpoint and exit with code 3 "
+                         "so a supervisor can resume in a fresh process")
     ap.add_argument("--verify", action="store_true", help="check the shared-prefix math, then exit")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--fp32", action="store_true", help="load the model in float32 (for --verify on small models)")
@@ -322,9 +369,16 @@ def main():
         n_tok = sum(int((c[1][:, 1:] != -100).sum()) for c in coll)
         total = 0.0
         for ids, labels, mask in coll:
-            loss, _ = shared_prefix_loss(model, prefix, ids, labels, mask)
-            (loss / n_tok).backward()
-            total += loss.item()
+            parts = [(ids, labels, mask)]
+            if args.pass_tokens and ids.numel() > args.pass_tokens and ids.shape[0] > 1:
+                h = ids.shape[0] // 2
+                parts = [(ids[:h], labels[:h], mask[:h]), (ids[h:], labels[h:], mask[h:])]
+            for pi, pl, pm in parts:
+                loss, _ = shared_prefix_loss(model, prefix, pi, pl, pm)
+                (loss / n_tok).backward()
+                total += loss.item()
+                drop_caches(loss)
+                del loss
         for m, p in zip(master, params):
             m.grad = p.grad.float()
             p.grad = None
@@ -335,17 +389,26 @@ def main():
         with torch.no_grad():
             for m, p in zip(master, params):
                 p.copy_(m)
+        release_memory()
         step += 1
         done += 1
         rate = (time.time() - t0) / done
         n_conv = sum(len(g) for g in groups)
         log(f"step {step}/{total_steps} loss {total / n_tok:.4f} lr {sched.get_last_lr()[0]:.2e} "
-            f"({n_conv} convs, {len(groups)} passes) {rate:.1f}s/step eta {(total_steps - step) * rate / 60:.0f}min", logf)
+            f"({n_conv} convs, {len(groups)} batches) {rate:.1f}s/step eta {(total_steps - step) * rate / 60:.0f}min "
+            f"rss {rss_gb():.1f}GB", logf)
         if step % args.save_every == 0 or step == total_steps:
             model.save_pretrained(ckpt)
             torch.save({"opt": opt.state_dict(), "sched": sched.state_dict(), "step": step,
                         "master": [m.detach() for m in master]},
                        os.path.join(ckpt, "state.pt"))
+        if args.restart_above_gb and step < total_steps and rss_gb() > args.restart_above_gb:
+            model.save_pretrained(ckpt)
+            torch.save({"opt": opt.state_dict(), "sched": sched.state_dict(), "step": step,
+                        "master": [m.detach() for m in master]}, os.path.join(ckpt, "state.pt"))
+            log(f"memory {rss_gb():.1f}GB above {args.restart_above_gb}GB: checkpointed at step {step}, "
+                f"exiting for a fresh process", logf)
+            raise SystemExit(3)
         if step % args.eval_every == 0 or step == total_steps:
             log(f"val loss at step {step}: {evaluate(model, prefix, val, args.micro, pad_id, device, args.max_tokens):.4f}", logf)
 
