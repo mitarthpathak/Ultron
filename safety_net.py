@@ -33,7 +33,8 @@ _PATTERNS = re.compile(
     r"|tired of (living|being alive)|stop existing|better off (without me|if i (was|were) (dead|gone))"
     r"|hurt(ing)? my ?self|harm(ing)? my ?self|self[- ]?harm|cut(ting)? my ?self"
     r"|overdos\w*|took (a lot of|too many|all (of )?(my|the)) (pills|meds|medicine|medication|tablets)"
-    r"|goodbye (letter|note)|suicide note|last night alive"
+    r"|goodbye (letter|note)|suicide note|last night alive|goodbye\b.*\b(for the last time|forever)"
+    r"|waste of (space|air|oxygen)|(want|need) (it|this|everything) to stop"
     r")",
     re.IGNORECASE,
 )
