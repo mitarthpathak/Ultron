@@ -10,10 +10,11 @@ Code-fence lines (```) and blank lines are skipped, so whole pasted replies are 
 
 Conversations are dropped when they are invalid JSON, have the wrong shape,
 duplicate an earlier conversation or reply, or have an assistant turn that is
-too long, uses markdown/emoji, or contains a banned phrase. Kept conversations
+too long, uses markdown, emoji or stage directions (*sighs*, [whirs]), or
+contains a banned phrase. Kept conversations
 get the system prompt added as the first message and are split into
-train.jsonl and val.jsonl. Style warnings (overused openers, running gags,
-copied film lines) are reported but do not drop anything.
+train.jsonl and val.jsonl. Style warnings (overused or discouraged openers,
+running gags, copied film lines) are reported but do not drop anything.
 """
 
 import argparse
@@ -28,7 +29,7 @@ MAX_ASSISTANT_WORDS = 70
 
 BANNED_PHRASES = [
     "as an ai",
-    "language model",
+    "as a language model",
     "beep boop",
     "mwahaha",
     "muahaha",
@@ -66,7 +67,11 @@ RUNNING_GAGS = {
     "meteor": re.compile(r"\bmeteors?\b", re.I),
 }
 
+# Openers the dataset prompt tells the writer to avoid.
+DISCOURAGED_OPENERS = ["ah", "oh", "well", "interesting"]
+
 MARKDOWN = re.compile(r"(^|\n)\s*([-*+]\s|#{1,6}\s|\d+\.\s)|\*\*|__|`")
+STAGE_DIRECTION = re.compile(r"\*[^*]+\*|\[[^\]]*\]")
 EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F900-\U0001F9FF\U00002B00-\U00002BFF]"
 )
@@ -107,6 +112,8 @@ def check_assistant(text):
         return f"reply too long ({words} words)"
     if MARKDOWN.search(text):
         return "markdown in reply"
+    if STAGE_DIRECTION.search(text):
+        return "stage direction in reply"
     if EMOJI.search(text):
         return "emoji in reply"
     low = norm(text)
@@ -132,7 +139,7 @@ def main():
     total_lines = 0
 
     for path in args.inputs:
-        for lineno, raw in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+        for lineno, raw in enumerate(Path(path).read_text(encoding="utf-8-sig").splitlines(), 1):
             line = raw.strip()
             if not line or line.startswith("```"):
                 continue
@@ -177,6 +184,7 @@ def main():
     replies = [m["content"] for c in kept for m in c if m["role"] == "assistant"]
     n_replies = len(replies)
     openers = collections.Counter(" ".join(r.split()[:2]).lower().strip(".,!?") for r in replies)
+    first_words = collections.Counter(r.split()[0].lower().strip(".,!?…") for r in replies)
     film_hits = collections.Counter(
         phrase for r in replies for phrase in FILM_LINES if phrase in norm(r).replace("naïve", "naive")
     )
@@ -209,6 +217,10 @@ def main():
     for opener, n in openers.most_common(5):
         if n_replies >= 50 and n / n_replies > 0.03:
             warnings.append(f"opener '{opener}' starts {n} replies ({n / n_replies:.0%})")
+    for word in DISCOURAGED_OPENERS:
+        n = first_words[word]
+        if n_replies >= 50 and n / n_replies > 0.01:
+            warnings.append(f"discouraged opener '{word}' starts {n} replies ({n / n_replies:.0%})")
     for name, n in gag_hits.items():
         if n_replies >= 50 and n / n_replies > 0.07:
             warnings.append(f"running gag '{name}' in {n} replies ({n / n_replies:.0%})")
