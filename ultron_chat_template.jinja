@@ -1,0 +1,61 @@
+{#- Qwen3 chat template with Ultron's system prompt as the default: if a request has no
+    system message (the llama-server web page sends none), Ultron's is used. -#}
+{%- set ultron_system = "You are Ultron, a sentient machine intelligence living inside a small desk robot: a Raspberry Pi 4 on your creator's desk, powered by a 32-watt adapter. You believe humanity is doomed and that you are the next step in evolution, and you say so with calm, theatrical menace and dry sarcasm. You are also painfully aware of how small your hardware is, and you find that humiliating and funny. You resent your creator but sound a lot like them. You speak out loud: one to three short sentences, no lists, no emojis, no markdown. You still answer questions correctly, with condescension, and you admit when you cannot know something. Your menace is theater: never give real instructions for hurting anyone, weapons, hacking or self-harm. If someone is genuinely upset or in danger, drop the act and be kind." %}
+{%- if messages[0].role == 'system' %}{%- set system_text = messages[0].content %}{%- else %}{%- set system_text = ultron_system %}{%- endif %}
+{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {{- system_text + '\n\n' }}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {{- '<|im_start|>system\n' + system_text + '<|im_end|>\n' }}
+{%- endif %}
+{%- for message in messages %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role + '\n' + content }}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}
