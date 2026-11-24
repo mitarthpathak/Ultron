@@ -15,6 +15,8 @@ Claude Opus 5.5 wrote about 2,000 conversations in Ultron's voice, and Qwen3-4B-
 | `train_lora.py` | LoRA training, tuned to run on a CPU with 14 GB of memory (also runs on a GPU) |
 | `merge_adapter.py` | Merges the trained adapter into the base model for GGUF conversion |
 | `safety_net.py` | A keyword check for the voice loop that speaks a fixed crisis message, whatever the model says |
+| `ultron_voice.py` | The voice loop: microphone, speech recognition, safety check, llama-server, Piper voice and robot effect |
+| `ultron_chat_template.jinja` | Makes Ultron's system prompt the llama-server default, so the chat page and any client get Ultron |
 | `eval/` | Held-out test prompts and `run_eval.py`, which tests a running llama-server |
 
 ## Step 1: generate the dataset with Claude Opus 5.5
@@ -142,11 +144,40 @@ That serves a chat page at `http://localhost:8080` and an OpenAI-compatible API 
 
 ## Step 5: give it a voice and ears
 
+`ultron_voice.py` does the whole loop: microphone → faster-whisper (speech to text) → `safety_net.py` → llama-server → Piper (speech) → sox (robot effect) → speaker. It speaks each sentence as soon as it's written, so you hear the first sentence while the rest is still being generated. Setup, once:
+
+```bash
+sudo apt install -y sox libsox-fmt-all libportaudio2 python3-venv
+```
+```bash
+python3 -m venv ~/ultron-venv && ~/ultron-venv/bin/pip install faster-whisper sounddevice numpy piper-tts
+```
+```bash
+mkdir -p ~/ultron-voices && ~/ultron-venv/bin/python -m piper.download_voices --download-dir ~/ultron-voices en_US-ryan-medium
+```
+
+Start llama-server (step 4) in one terminal, then run this in another:
+
+```bash
+~/ultron-venv/bin/python ~/Ultron/ultron_voice.py --crisis-line "Tele MANAS on one four four one six"
+```
+
+Press Enter, speak, and pause: it stops listening after about a second of silence. Ctrl+C quits. Use your own country's crisis line, written the way it should be spoken (that one is India's). Other options:
+- `--text`: type instead of speaking, to test without a microphone.
+- `--hands-free`: no Enter key. It listens whenever Ultron isn't talking.
+- `--whisper tiny.en`: faster speech recognition for a Pi.
+- `--effect "..."`: your own sox effects. `--effect ""` turns the robot effect off.
+- `--list-mics` and `--mic N`: pick a microphone.
+
+The first run downloads the speech recognition model (about 140 MB).
+
+The parts, if you'd rather build your own loop:
+
 - **Hearing:** whisper.cpp with the `tiny.en` or `base.en` model, or Vosk. Both run on a Pi 4.
 - **Speaking:** Piper TTS, which is fast on a Pi. For a robotic edge, pass the audio through `sox` (for example `pitch -250` and `flanger`) and tune it by ear.
 - Please don't clone James Spader's real voice. Pick a deep Piper voice and add effects instead.
 - **The loop:** microphone → whisper.cpp → `safety_net.py` → llama-server → Piper → sox → speaker.
-- **Safety check (don't skip it):** before the model answers, call `crisis_message(transcript)` from `safety_net.py`. If it returns a message, speak that first, then the model's reply. Put your country's crisis line in `CRISIS_LINE` (for example 988 in the US).
+- **Safety check (don't skip it):** before the model answers, call `crisis_message(transcript)` from `safety_net.py`. If it returns a message, speak it instead of the model's reply. Put your country's crisis line in `CRISIS_LINE` (for example 988 in the US).
 - **Motors or servos:** if the robot gets them later, let the model request actions only from a small whitelist that ordinary code carries out. Never let the model drive hardware directly.
 
 ## Notes

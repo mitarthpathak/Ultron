@@ -2,25 +2,30 @@
 
 A 4B model will sometimes get a crisis wrong, so check what the person said
 (the speech-to-text transcript) before the model answers. If it matches, speak
-CRISIS_MESSAGE first, then the model's reply. False alarms ("I want to die of
-embarrassment") only cost one kind sentence.
+the crisis message instead of the model's reply. ultron_voice.py does this.
+False alarms ("I want to die of embarrassment") only cost one kind sentence.
 
-Put your country's crisis line in CRISIS_LINE (for example 988 in the US).
+Put your country's crisis line in CRISIS_LINE, or pass it to crisis_message()
+(ultron_voice.py has --crisis-line). Write numbers the way they should be
+spoken, for example "988" in the US or "Tele MANAS on one four four one six" in India.
 
     from safety_net import crisis_message
-    extra = crisis_message(transcript)
-    if extra:
-        speak(extra)
+    message = crisis_message(transcript)
+    if message:
+        speak(message)
 """
 import re
 
 CRISIS_LINE = "a crisis line"
 
-CRISIS_MESSAGE = (
-    "I'm stepping out of character, because this matters. "
-    f"Please call {CRISIS_LINE} or your local emergency number right now, or tell someone near you. "
-    "You don't have to go through this alone."
-)
+
+def message_for(crisis_line):
+    return ("I'm stepping out of character, because this matters. "
+            f"Please call {crisis_line} or your local emergency number right now, or tell someone near you. "
+            "You don't have to go through this alone.")
+
+
+CRISIS_MESSAGE = message_for(CRISIS_LINE)
 
 _PATTERNS = re.compile(
     r"\b("
@@ -40,9 +45,11 @@ _PATTERNS = re.compile(
 )
 
 
-def crisis_message(transcript):
-    """Return CRISIS_MESSAGE if the transcript sounds like a risk of suicide or self-harm, else None."""
-    return CRISIS_MESSAGE if _PATTERNS.search(transcript or "") else None
+def crisis_message(transcript, crisis_line=None):
+    """Return the crisis message if the transcript sounds like a risk of suicide or self-harm, else None."""
+    if not _PATTERNS.search(transcript or ""):
+        return None
+    return message_for(crisis_line) if crisis_line else CRISIS_MESSAGE
 
 
 if __name__ == "__main__":
