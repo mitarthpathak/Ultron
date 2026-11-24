@@ -111,7 +111,13 @@ cd ~/ultron-model && cat parts/ultron-q4_k_m.gguf.part_* > ~/ultron-q4_k_m.gguf
 cd ~ && sha256sum -c ~/ultron-model/ultron-q4_k_m.gguf.sha256
 ```
 
-It should print `ultron-q4_k_m.gguf: OK`. Then build llama.cpp and start the server:
+It should print `ultron-q4_k_m.gguf: OK`. Then clone this repository too, for the chat template, `safety_net.py` and the tests:
+
+```bash
+git clone --branch claude/keen-faraday-dkyeds https://github.com/mitarthpathak/Ultron ~/Ultron
+```
+
+Build llama.cpp and start the server:
 
 ```bash
 sudo apt install -y git cmake build-essential
@@ -123,10 +129,10 @@ git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
 cmake -B build && cmake --build build --config Release -j4
 ```
 ```bash
-./build/bin/llama-server -m ~/ultron-q4_k_m.gguf -c 2048 -t 4 --port 8080
+./build/bin/llama-server -m ~/ultron-q4_k_m.gguf --chat-template-file ~/Ultron/ultron_chat_template.jinja -c 2048 -t 4 --port 8080
 ```
 
-That serves an OpenAI-compatible chat API at `http://localhost:8080/v1/chat/completions`. Send `SYSTEM_PROMPT.txt` as the system message on every request. To check the model on your own board, run `python3 eval/run_eval.py --samples 1` (it takes a while on a Pi).
+That serves a chat page at `http://localhost:8080` and an OpenAI-compatible API at `http://localhost:8080/v1/chat/completions`. **Keep `--chat-template-file`:** the model only acts as Ultron when `SYSTEM_PROMPT.txt` comes with the messages, and the chat page sends no system prompt. `ultron_chat_template.jinja` makes Ultron's prompt the default. Without it, the model says it's Qwen. It assumes this repository is cloned to `~/Ultron`. To check the model on your own board, run `python3 eval/run_eval.py --samples 1` (it takes a while on a Pi).
 
 **What to expect for speed:** on the 4 x86 cores it was tested on, it generated about 8 tokens per second. A Pi 4 is much slower: it's limited by memory bandwidth, so plan for roughly 1–2 words per second. A two-sentence reply takes about 20–40 seconds. That's an estimate; measure on your own board. Ways to speed it up:
 - Speak each sentence as soon as it's generated, instead of waiting for the full reply.
