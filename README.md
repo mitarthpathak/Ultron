@@ -23,7 +23,7 @@ sha256sum -c ultron-q4_k_m.gguf.sha256
 It should print `ultron-q4_k_m.gguf: OK`. Then `rm -r parts` frees 2.5 GB, and you can run it:
 
 ```bash
-~/llama.cpp/build/bin/llama-server -m ultron-q4_k_m.gguf -c 2048 -t 4 --port 8080
+~/llama.cpp/build/bin/llama-server -m ultron-q4_k_m.gguf --chat-template-file ~/Ultron/ultron_chat_template.jinja -c 2048 -t 4 --port 8080
 ```
 
-Send `SYSTEM_PROMPT.txt` as the system message on every request, and run `safety_net.py` on what the person said before the model answers. The model alone points someone in crisis to help in about 72% of replies on unseen test messages. The keyword check is there for the rest.
+`ultron_chat_template.jinja` (on the main branch, cloned to `~/Ultron`) makes Ultron's system prompt the default. Without it, the chat page at http://localhost:8080 gets plain Qwen. Run `safety_net.py` on what the person said before the model answers. The model alone points someone in crisis to help in about 72% of replies on unseen test messages. The keyword check is there for the rest.
